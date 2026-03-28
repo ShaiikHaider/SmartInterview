@@ -1,20 +1,27 @@
-# Backend
-.env
-__pycache__/
-*.pyc
-.venv/
-backend/venv/
-
-# Frontend
+# dependencies
 node_modules/
-.next/
-dist/
-build/
-.env.local
-.env.production
-.DS_Store
+.pnp
+.pnp.*
+.yarn/
 
-# Brain / Logs
-.gemini/
-brain/
-logs/
+# Testing
+coverage/
+
+# Next.js
+.next/
+out/
+build/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Misc
+.DS_Store
+*.pem
+.env*
+.vercel
+*.tsbuildinfo
+next-env.d.ts

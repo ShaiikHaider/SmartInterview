@@ -1,41 +1,32 @@
-# AI Interview Coach 🤖🎤
+# SmartInterview
 
-A production-grade, state-machine-driven AI Interview Coach. It simulates a real-time technical interview using bidirectional voice and a live coding environment.
+A voice-enabled AI technical interview simulator.
 
-## Features
-- **Bidirectional Voice**: Hands-free interview using Web Speech APIs (STT & TTS).
-- **Interactive Coding**: Monaco Editor with AI-run code evaluation and feedback.
-- **Strict Interview Phases**: From HR Intro to Technical Discussion and Coding.
-- **AI Personas**: FAANG-level interviewer logic powered by Google Gemini 2.5 Flash.
+## Project Structure
+- `frontend/`: Next.js application (React, TailwindCSS, Monaco Editor)
+- `backend/`: FastAPI application (Python, Google Gemini API)
 
-## Setup
+## Getting Started
 
-### Backend (FastAPI)
-1. Install dependencies: `pip install -r backend/requirements.txt`
-2. Create `backend/.env` with your `GEMINI_API_KEY`.
-3. Run: `uvicorn backend.main:app`
+### Frontend
+1. Navigate to the frontend directory: `cd frontend`
+2. Install dependencies: `npm install`
+3. Run the development server: `npm run dev`
 
-### Frontend (Next.js)
-1. Install dependencies: `npm install`
-2. Run: `npm run dev`
+### Backend
+1. Navigate to the backend directory: `cd backend`
+2. Create a virtual environment: `python -m venv .venv`
+3. Activate the virtual environment: `source .venv/bin/activate` (or `.venv\Scripts\activate` on Windows)
+4. Install dependencies: `pip install -r requirements.txt`
+5. Run the server: `python main.py`
 
-## Deployment 🚀
+## Deployment
 
-To make this application live for your friends, follow these two steps:
+### Frontend (Vercel)
+- Root Directory: `frontend`
+- Framework Preset: `Next.js`
 
-### 1. Backend (Hosted on Render)
-- **Repo**: Connect this GitHub repository to [Render](https://render.com).
-- **Settings**:
-  - **Environment**: Python
-  - **Build Command**: `pip install --only-binary :all: -r backend/requirements.txt`
-  - **Start Command**: `PYTHONPATH=. uvicorn backend.main:app --host 0.0.0.0 --port $PORT`
-- **Environment Variables**:
-  - `GEMINI_API_KEY`: Your Google Gemini API Key.
+### Backend (Render)
+- Build Command: `pip install -r requirements.txt`
+- Start Command: `python main.py` (or `uvicorn main:app --host 0.0.0.0 --port 10000`)
 
-### 2. Frontend (Hosted on Vercel)
-- **Repo**: Connect this GitHub repository to [Vercel](https://vercel.com).
-- **Settings**: Vercel will auto-detect Next.js.
-- **Environment Variables**:
-  - `NEXT_PUBLIC_API_URL`: Use your **Render Web Service URL** (e.g., `https://smartinterview-a5w7.onrender.com`).
-
-Once both are deployed, your friends can use the Vercel link to start their voice-enabled interviews!
