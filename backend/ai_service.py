@@ -72,7 +72,7 @@ class KeyManager:
 
 # Initialize global KeyManager
 key_manager = KeyManager(API_KEYS)
-MODEL = "gemini-2.0-flash" 
+MODEL = "gemini-1.5-flash" 
 
 SYSTEM_PROMPT = """You are a FAANG technical interviewer. 
 Keep responses EXTREMELY conversational and short (max 2-3 sentences).
