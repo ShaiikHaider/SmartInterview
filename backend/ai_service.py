@@ -39,34 +39,35 @@ class KeyManager:
         self.lock = asyncio.Lock()
         self.cooldown_seconds = 60 # Free tier limits are usually per minute
 
-    async def get_next_key(self) -> Optional[str]:
+    async def get_next_key(self) -> str:
         async with self.lock:
-            start_index = self.index
             current_time = time.time()
             
             # Clean up old exhausted keys
             keys_to_reset = [k for k, t in self.exhausted_keys.items() if current_time - t > self.cooldown_seconds]
             for k in keys_to_reset:
-                logger.info(f"Key at index {self.keys.index(k)} cooled down and is now AVAILABLE again.")
+                logger.info(f"Key index {self.keys.index(k)} cooled down.")
                 del self.exhausted_keys[k]
 
-            while len(self.exhausted_keys) < len(self.keys):
+            # Try to find a non-exhausted key
+            start_index = self.index
+            for _ in range(len(self.keys)):
                 key = self.keys[self.index]
                 self.index = (self.index + 1) % len(self.keys)
                 if key not in self.exhausted_keys:
-                    logger.info(f"🔄 Using API Key index {self.keys.index(key)}")
+                    logger.info(f"🔄 Using healthy key index {self.keys.index(key)}")
                     return key
-                
-                if self.index == start_index:
-                    break
             
-            logger.error("❌ ALL KEYS EXHAUSTED (No keys available in the current cooldown window)")
-            return None
+            # If ALL are exhausted, just pick the next one anyway so we can see the real error
+            key = self.keys[self.index]
+            self.index = (self.index + 1) % len(self.keys)
+            logger.warning(f"⚠️ FORCE USING exhausted key index {self.keys.index(key)} to identify real error.")
+            return key
 
     async def mark_exhausted(self, key: str, reason: str = "Unknown"):
         async with self.lock:
             if key not in self.exhausted_keys:
-                logger.warning(f"⚠️ API Key index {self.keys.index(key)} EXHAUSTED. Reason: {reason}")
+                logger.warning(f"⚠️ Key index {self.keys.index(key)} EXHAUSTED. Reason: {reason}")
                 self.exhausted_keys[key] = time.time()
 
 # Initialize global KeyManager
@@ -95,9 +96,7 @@ async def call_gemini(prompt: str, system_instruction: str = SYSTEM_PROMPT) -> s
     """Robust call with rotation and retry logic."""
     for attempt in range(len(API_KEYS) + 1):
         key = await key_manager.get_next_key()
-        if not key:
-            return "ALL_KEYS_EXHAUSTED: Please try again later."
-
+        
         client = genai.Client(api_key=key)
         try:
             # Use max_output_tokens to constrain quota usage
