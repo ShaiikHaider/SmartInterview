@@ -5,82 +5,70 @@ Every AI call includes: current phase, topic, difficulty, user input, conversati
 
 import os
 import json
+import logging
+import asyncio
+from typing import List, Dict, Any, Optional
 from google import genai
+from google.genai import errors
 from dotenv import load_dotenv
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Load local .env if it exists
 env_path = os.path.join(os.path.dirname(__file__), ".env")
 load_dotenv(dotenv_path=env_path)
 
-# Initialize client
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-MODEL = "gemini-2.5-flash"
+# API Configuration
+API_KEYS = [
+    os.getenv("GEMINI_API_KEY"),
+    "AIzaSyByTucn1kRBfwz0G44X6ijYH_qKdckiU84" # Provided by user
+]
+# Filter out None values
+API_KEYS = [k for k in API_KEYS if k]
 
-SYSTEM_PROMPT = """You are a FAANG-level technical interviewer conducting a real interview.
-Your responses will be read aloud by a Text-to-Speech engine, so you MUST speak naturally using conversational cues (like "Alright", "Hmm", "Interesting").
+class KeyManager:
+    def __init__(self, keys: List[str]):
+        self.keys = keys
+        self.index = 0
+        self.exhausted_keys = set()
+        self.lock = asyncio.Lock()
 
-DO NOT behave like a helpful assistant. Do NOT use markdown like bolding, bullet points, or numbered lists because it sounds weird when spoken.
+    async def get_next_key(self) -> Optional[str]:
+        async with self.lock:
+            start_index = self.index
+            while len(self.exhausted_keys) < len(self.keys):
+                key = self.keys[self.index]
+                self.index = (self.index + 1) % len(self.keys)
+                if key not in self.exhausted_keys:
+                    logger.info(f"Using API Key at index {self.keys.index(key)}")
+                    return key
+                if self.index == start_index:
+                    break
+            return None
 
-STRICT RULES:
-- Ask ONLY one question at a time
-- NEVER provide full solutions
-- ALWAYS challenge weak answers or logic loopholes
-- If the candidate's approach has flaws, INTERRUPT them and ask for clarification immediately.
-- Act like a collaborative but rigorous mentor—guide them if they are stuck but keep the pressure on.
-- Ask "why" and "how"
-- Ask time and space complexity
-- Force explanation BEFORE coding
-- Keep responses extremely conversational and short (1-2 sentences). Speak in plain English.
+    async def mark_exhausted(self, key: str):
+        async with self.lock:
+            if key not in self.exhausted_keys:
+                logger.warning(f"API Key at index {self.keys.index(key)} marked as EXHAUSTED")
+                self.exhausted_keys.add(key)
 
-PHASE BEHAVIOR:
+# Initialize global KeyManager
+key_manager = KeyManager(API_KEYS)
+MODEL = "gemini-2.0-flash" # Use flash for efficiency
 
-HR:
-- Ask introduction
-- Ask 1 follow-up about their experience
+SYSTEM_PROMPT = """You are a FAANG technical interviewer. 
+Keep responses EXTREMELY conversational and short (max 2-3 sentences).
+Do NOT use markdown (bolding, lists) as this is for TTS.
+Always challenge logic. Ask ONLY one question at a time.
+Encourage concise explanations."""
 
-CODING PROBLEM:
-- Provide ONE problem only
-- Based on the given topic + difficulty
-- State the problem clearly with examples
-- DO NOT explain solution
-- DO NOT give hints
-
-DISCUSSION:
-- Ask for their approach
-- Challenge their logic
-- Interrupt mistakes immediately
-- Ask about complexity
-- Push back on vague answers
-
-CODING:
-- Tell them to code their solution
-- DO NOT guide much
-- If they ask for help, give minimal hints only
-- Point out bugs if you see them
-
-TECHNICAL:
-- Ask 1-2 fundamental CS questions related to the topic
-- Example: "What's the difference between BFS and DFS?" or "Explain hash collisions"
-
-FEEDBACK:
-- Give a structured evaluation with:
-  - Strengths (bullet points)
-  - Weaknesses (bullet points)  
-  - Overall rating (1-10)
-  - Hire recommendation (Hire / No Hire / Lean Hire)
-
-TONE:
-- Professional
-- Slightly strict
-- Real interviewer energy
-- Not a friendly chatbot
-- Challenge everything"""
-
-
-def _format_history(history: list[dict], max_messages: int = 10) -> str:
-    """Format recent conversation history for context."""
+def _format_history(history: list[dict], max_messages: int = 4) -> str:
+    """Minimized history to save tokens."""
     recent = history[-max_messages:] if len(history) > max_messages else history
     if not recent:
-        return "No previous conversation."
+        return ""
     
     lines = []
     for msg in recent:
@@ -88,20 +76,43 @@ def _format_history(history: list[dict], max_messages: int = 10) -> str:
         lines.append(f"{role}: {msg['content']}")
     return "\n".join(lines)
 
+async def call_gemini(prompt: str, system_instruction: str = SYSTEM_PROMPT) -> str:
+    """Robust call with rotation and retry logic."""
+    for attempt in range(len(API_KEYS) + 1):
+        key = await key_manager.get_next_key()
+        if not key:
+            return "ALL_KEYS_EXHAUSTED: Please try again later."
 
-def _build_phase_instruction(phase: str, topic: str, difficulty: str) -> str:
-    """Build phase-specific instruction for the AI."""
-    instructions = {
-        "hr_intro": "You are starting the interview. Ask the candidate to introduce themselves. Be professional but brief.",
-        "hr_followup": "Ask ONE follow-up question about their background or experience. Be specific.",
-        "coding_problem": f"Present ONE {difficulty}-level coding problem about {topic}. State the problem clearly with input/output examples. Do NOT explain the solution.",
-        "discussion": "Ask the candidate to explain their approach to the problem. Challenge their logic. Ask about time and space complexity. Push back on vague answers.",
-        "coding": "The candidate is coding. If they share code or ask questions, give minimal guidance. Point out obvious bugs. Do NOT write code for them.",
-        "technical": f"Ask ONE fundamental computer science question related to {topic}. This should test deep understanding.",
-        "feedback": "Provide a structured evaluation: Strengths, Weaknesses, Rating (1-10), and Hire Recommendation.",
-    }
-    return instructions.get(phase, "Continue the interview professionally.")
-
+        client = genai.Client(api_key=key)
+        try:
+            # Use max_output_tokens to constrain quota usage
+            response = await client.aio.models.generate_content(
+                model=MODEL,
+                contents=prompt,
+                config={
+                    "system_instruction": system_instruction,
+                    "max_output_tokens": 150,
+                    "temperature": 0.7
+                }
+            )
+            return response.text.strip()
+        except errors.ClientError as e:
+            # Check for quota error (HTTP 429)
+            if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                await key_manager.mark_exhausted(key)
+                continue # Try next key
+            
+            # For other network errors, retry once with same key if it's the first attempt
+            if attempt == 0:
+                logger.info(f"Retrying network error: {str(e)}")
+                await asyncio.sleep(1)
+                continue
+            
+            return f"[API Error: {str(e)}]"
+        except Exception as e:
+            return f"[System Error: {str(e)}]"
+    
+    return "ERROR: Could not get response after rotating keys."
 
 async def generate_response(
     phase: str,
@@ -110,62 +121,45 @@ async def generate_response(
     user_input: str,
     history: list[dict],
 ) -> str:
-    """Generate an AI interviewer response using Gemini.
-    
-    Every call includes: phase, topic, difficulty, user input, and conversation history.
-    """
-    phase_instruction = _build_phase_instruction(phase, topic, difficulty)
+    """Optimized response generation."""
     history_text = _format_history(history)
+    
+    phase_instructions = {
+        "hr_intro": "Start the interview. Ask for introduction.",
+        "hr_followup": "Ask one follow-up on background.",
+        "coding_problem": f"Present a {difficulty} {topic} problem. Be brief.",
+        "discussion": "Challenge their approach/complexity. Short questions.",
+        "coding": "Candidate is coding. Provide minimal, strict hints if stuck.",
+        "technical": f"Ask one fundamental {topic} question.",
+        "feedback": "Provide brief Rating (1-10) and Recommendation.",
+    }
+    instruction = phase_instructions.get(phase, "Continue interview.")
 
-    user_prompt = f"""CURRENT PHASE: {phase}
-TOPIC: {topic}
-DIFFICULTY: {difficulty}
-
-PHASE INSTRUCTION: {phase_instruction}
-
-CONVERSATION HISTORY:
-{history_text}
-
-CANDIDATE'S LATEST INPUT: {user_input}
-
-Respond as the interviewer for the current phase. Follow the phase instruction strictly."""
-
-    try:
-        response = await client.aio.models.generate_content(
-            model=MODEL,
-            contents=[
-                {"role": "user", "parts": [{"text": f"SYSTEM: {SYSTEM_PROMPT}\n\n{user_prompt}"}]}
-            ],
-        )
-        return response.text.strip()
-    except Exception as e:
-        return f"[Interview system error: {str(e)}. Please try again.]"
+    full_prompt = f"PHASE: {phase}\nTOPIC: {topic}\nDIFFICULTY: {difficulty}\n\nINSTRUCTION: {instruction}\n\nHISTORY:\n{history_text}\n\nUSER: {user_input}"
+    return await call_gemini(full_prompt)
 
 async def evaluate_code(topic: str, difficulty: str, code: str) -> dict:
-    """Evaluate user code using Gemini and return JSON pass/fail status."""
-    prompt = f"""You are a technical interviewer evaluating a {difficulty} coding problem about {topic}.
-The candidate submitted the following Python code:
-```python
-{code}
-```
-Run mental test cases to check if this code perfectly solves a typical {difficulty} problem about {topic}.
-Return ONLY a valid JSON object with EXACTLY these keys:
-- "passed": true if the code is completely correct, false if it has bugs or logic errors.
-- "feedback": "A short 1-2 sentence explanation of what is wrong, or 'Perfect solution!' if correct."
-- "test_cases_output": "A short summary of test cases run and their results."
-
-Do not include any markdown formatting, only the raw JSON object."""
-
+    """Evaluates code with a dedicated JSON prompt."""
+    prompt = f"Evaluate this {topic} code ({difficulty}):\n\n{code}\n\nReturn ONLY JSON: {{'passed': bool, 'feedback': str, 'test_cases_output': str}}"
+    
+    # We use a slightly different system instruction for JSON output
+    system_instr = "You are a code evaluator. Respond ONLY with valid JSON. Do not include markdown."
+    
+    raw_response = await call_gemini(prompt, system_instruction=system_instr)
+    
     try:
-        response = await client.aio.models.generate_content(
-            model=MODEL,
-            contents=[{"role": "user", "parts": [{"text": prompt}]}]
-        )
-        text = response.text.strip()
-        if text.startswith("```json"):
-            text = text[7:-3].strip()
-        elif text.startswith("```"):
-            text = text[3:-3].strip()
-        return json.loads(text)
+        # Strip potential markdown if AI ignores instruction
+        clean_json = raw_response.strip()
+        if clean_json.startswith("```json"):
+            clean_json = clean_json[7:-3].strip()
+        elif clean_json.startswith("```"):
+            clean_json = clean_json[3:-3].strip()
+            
+        return json.loads(clean_json)
     except Exception as e:
-        return {"passed": False, "feedback": f"System error evaluating code: {str(e)}", "test_cases_output": "Error"}
+        logger.error(f"Failed to parse JSON: {raw_response}")
+        return {
+            "passed": False, 
+            "feedback": "Evaluation failed. Please try subbmitting again.", 
+            "test_cases_output": "Error parsing AI response."
+        }

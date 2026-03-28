@@ -15,14 +15,15 @@ from backend.ai_service import generate_response
 
 app = FastAPI(title="AI Interview Coach")
 
-# CORS for frontend
+# CORS for frontend (Allow all for simplified Vercel/Render communication)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 
 # --- Request / Response models ---
