@@ -1,0 +1,20 @@
+# Backend
+.env
+__pycache__/
+*.pyc
+.venv/
+backend/venv/
+
+# Frontend
+node_modules/
+.next/
+dist/
+build/
+.env.local
+.env.production
+.DS_Store
+
+# Brain / Logs
+.gemini/
+brain/
+logs/
