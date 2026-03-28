@@ -1,3 +1,4 @@
+
 """AI service using Google Gemini for interview question generation.
 
 Every AI call includes: current phase, topic, difficulty, user input, conversation history.
@@ -28,35 +29,49 @@ API_KEYS = [
 # Filter out None values
 API_KEYS = [k for k in API_KEYS if k]
 
+import time
+
 class KeyManager:
     def __init__(self, keys: List[str]):
         self.keys = keys
         self.index = 0
-        self.exhausted_keys = set()
+        self.exhausted_keys = {} # key -> timestamp of exhaustion
         self.lock = asyncio.Lock()
+        self.cooldown_seconds = 60 # Free tier limits are usually per minute
 
     async def get_next_key(self) -> Optional[str]:
         async with self.lock:
             start_index = self.index
+            current_time = time.time()
+            
+            # Clean up old exhausted keys
+            keys_to_reset = [k for k, t in self.exhausted_keys.items() if current_time - t > self.cooldown_seconds]
+            for k in keys_to_reset:
+                logger.info(f"Key at index {self.keys.index(k)} cooled down and is now AVAILABLE again.")
+                del self.exhausted_keys[k]
+
             while len(self.exhausted_keys) < len(self.keys):
                 key = self.keys[self.index]
                 self.index = (self.index + 1) % len(self.keys)
                 if key not in self.exhausted_keys:
-                    logger.info(f"Using API Key at index {self.keys.index(key)}")
+                    logger.info(f"🔄 Using API Key index {self.keys.index(key)}")
                     return key
+                
                 if self.index == start_index:
                     break
+            
+            logger.error("❌ ALL KEYS EXHAUSTED (No keys available in the current cooldown window)")
             return None
 
-    async def mark_exhausted(self, key: str):
+    async def mark_exhausted(self, key: str, reason: str = "Unknown"):
         async with self.lock:
             if key not in self.exhausted_keys:
-                logger.warning(f"API Key at index {self.keys.index(key)} marked as EXHAUSTED")
-                self.exhausted_keys.add(key)
+                logger.warning(f"⚠️ API Key index {self.keys.index(key)} EXHAUSTED. Reason: {reason}")
+                self.exhausted_keys[key] = time.time()
 
 # Initialize global KeyManager
 key_manager = KeyManager(API_KEYS)
-MODEL = "gemini-2.0-flash" # Use flash for efficiency
+MODEL = "gemini-2.0-flash" 
 
 SYSTEM_PROMPT = """You are a FAANG technical interviewer. 
 Keep responses EXTREMELY conversational and short (max 2-3 sentences).
@@ -97,18 +112,19 @@ async def call_gemini(prompt: str, system_instruction: str = SYSTEM_PROMPT) -> s
             )
             return response.text.strip()
         except errors.ClientError as e:
+            error_str = str(e)
             # Check for quota error (HTTP 429)
-            if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
-                await key_manager.mark_exhausted(key)
+            if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+                await key_manager.mark_exhausted(key, reason=error_str)
                 continue # Try next key
             
             # For other network errors, retry once with same key if it's the first attempt
             if attempt == 0:
-                logger.info(f"Retrying network error: {str(e)}")
+                logger.info(f"Retrying network error: {error_str}")
                 await asyncio.sleep(1)
                 continue
             
-            return f"[API Error: {str(e)}]"
+            return f"[API Error (Key index {API_KEYS.index(key)}): {error_str}]"
         except Exception as e:
             return f"[System Error: {str(e)}]"
     
