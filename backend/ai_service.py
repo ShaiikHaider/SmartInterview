@@ -28,6 +28,11 @@ API_KEYS = [
 # Filter out None values
 API_KEYS = [k for k in API_KEYS if k]
 
+if not API_KEYS:
+    logger.error("❌ NO API KEYS FOUND! Check if GEMINI_API_KEY is set in .env or Render dashboard.")
+else:
+    logger.info(f"✅ Loaded {len(API_KEYS)} API key(s). First key starts with: {API_KEYS[0][:4]}...")
+
 import time
 
 class KeyManager:
