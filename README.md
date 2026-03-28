@@ -27,8 +27,8 @@ To make this application live for your friends, follow these two steps:
 - **Repo**: Connect this GitHub repository to [Render](https://render.com).
 - **Settings**:
   - **Environment**: Python
-  - **Build Command**: `pip install --only-binary :all: -r requirements.txt`
-  - **Start Command**: `uvicorn main:app --host 0.0.0.0 --port $PORT`
+  - **Build Command**: `pip install --only-binary :all: -r backend/requirements.txt`
+  - **Start Command**: `PYTHONPATH=. uvicorn backend.main:app --host 0.0.0.0 --port $PORT`
 - **Environment Variables**:
   - `GEMINI_API_KEY`: Your Google Gemini API Key.
 

@@ -5,9 +5,12 @@ from pydantic import BaseModel
 import sys
 import os
 
-from session import create_session, get_session, add_to_history
-from state_machine import next_phase, should_show_editor
-from ai_service import generate_response
+# Safe imports for folder structure
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+from backend.session import create_session, get_session, add_to_history
+from backend.state_machine import next_phase, should_show_editor
+from backend.ai_service import generate_response
 
 
 app = FastAPI(title="AI Interview Coach")
@@ -60,7 +63,7 @@ class ExecuteResponse(BaseModel):
 @app.post("/execute", response_model=ExecuteResponse)
 async def execute_code(req: ExecuteRequest):
     """Evaluates the user's code against AI mental test cases."""
-    from ai_service import evaluate_code
+    from backend.ai_service import evaluate_code
     
     session = get_session(req.session_id)
     eval_result = await evaluate_code(session["topic"], session["difficulty"], req.code)
