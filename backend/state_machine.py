@@ -32,7 +32,7 @@ def next_phase(session: dict, user_input: str) -> str:
         return "discussion"
 
     elif current == "discussion":
-        return "coding"
+        return "discussion"
 
     elif current == "coding":
         # Stay in coding until user explicitly says "done"

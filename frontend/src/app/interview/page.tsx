@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import CodeEditor from "@/components/CodeEditor";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -46,7 +46,60 @@ export default function InterviewPage() {
   const [isVoiceUnlocked, setIsVoiceUnlocked] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isVoiceEnabled, setIsVoiceEnabled] = useState(true);
+  const [isAiSpeaking, setIsAiSpeaking] = useState(false);
+  
   const recognitionRef = useRef<any>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  
+  // Silence logic
+  const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const silenceCountRef = useRef(0);
+  
+  // Interrupt buffer logic
+  const interruptBufferRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Voice auto-submit logic
+  const autoSubmitTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const latestInputRef = useRef("");
+  const isSubmittingRef = useRef(false);
+  
+  useEffect(() => {
+      latestInputRef.current = input;
+  }, [input]);
+
+  const resetSilenceTimer = useCallback(() => {
+    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+    
+    // Only set silence timer if not loading, not AI speaking, and interview not over
+    if (isLoading || isAiSpeaking || phase === "feedback" || !sessionId) return;
+    
+    // Dynamic duration (much longer to allow the candidate to think)
+    let delay = phase === "coding" ? 30000 : 15000;
+    // Increase delay if repeated silence
+    delay += (silenceCountRef.current * 3000); 
+
+    silenceTimerRef.current = setTimeout(() => {
+        handleSilence();
+    }, delay);
+  }, [isLoading, isAiSpeaking, phase, sessionId]);
+
+  useEffect(() => {
+    resetSilenceTimer();
+    return () => {
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+    };
+  }, [resetSilenceTimer]);
+
+  const interruptAI = useCallback(() => {
+      if (abortControllerRef.current) {
+          abortControllerRef.current.abort();
+      }
+      window.speechSynthesis?.cancel();
+      setIsAiSpeaking(false);
+      setIsLoading(false);
+      silenceCountRef.current = 0; // Reset silence on interrupt
+      resetSilenceTimer();
+  }, [resetSilenceTimer]);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -57,24 +110,69 @@ export default function InterviewPage() {
         recognitionRef.current.interimResults = true;
         
         recognitionRef.current.onresult = (event: any) => {
-          let finalTranscript = "";
-          for (let i = 0; i < event.results.length; ++i) {
-            finalTranscript += event.results[i][0].transcript;
+          let partial = "";
+          let isFinal = false;
+          
+          for (let i = event.resultIndex; i < event.results.length; ++i) {
+            if (event.results[i].isFinal) {
+              isFinal = true;
+            }
+            partial += event.results[i][0].transcript;
           }
-          setInput(finalTranscript);
+          
+          // Clear any auto-submit or silence timers since the user is actively talking!
+          if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+          if (autoSubmitTimerRef.current) clearTimeout(autoSubmitTimerRef.current);
+
+          // Interrupt logic: wait for a short buffer or isFinal to ensure it's real speech
+          if (isAiSpeaking && partial.trim().length > 3) {
+             if (!interruptBufferRef.current) {
+                 interruptBufferRef.current = setTimeout(() => {
+                     interruptAI();
+                 }, 400); // 400ms buffer
+             }
+          } else if (isAiSpeaking && isFinal) {
+             if (interruptBufferRef.current) clearTimeout(interruptBufferRef.current);
+             interruptAI();
+          }
+
+          if (isFinal) {
+             if (interruptBufferRef.current) clearTimeout(interruptBufferRef.current);
+             setInput(prev => {
+                const updated = prev + (prev.length > 0 ? " " : "") + partial.trim();
+                return updated;
+             });
+             
+             // Auto-submit 1.5s after the final word is detected
+             if (autoSubmitTimerRef.current) clearTimeout(autoSubmitTimerRef.current);
+             autoSubmitTimerRef.current = setTimeout(() => {
+                 if (latestInputRef.current.trim() && !isSubmittingRef.current) {
+                     silenceCountRef.current = 0; 
+                     handleSend(); // Using handleSend instead of raw sendMessageCore to ensure clean UI state
+                 }
+             }, 2000); // Increased to 2.0s to avoid rushing
+          }
         };
         
         recognitionRef.current.onerror = (event: any) => {
-          console.error("Speech recognition error", event.error);
-          setIsListening(false);
+          // Ignore no-speech errors which are common
+          if (event.error !== 'no-speech') {
+             console.error("Speech recognition error", event.error);
+             setIsListening(false);
+          }
         };
         
         recognitionRef.current.onend = () => {
-          setIsListening(false);
+          // Restart listening if we are supposed to be listening (continuous)
+          if (isVoiceUnlocked && !isAiSpeaking && phase !== "feedback") {
+             try { recognitionRef.current?.start(); } catch(e) {}
+          } else {
+             setIsListening(false);
+          }
         };
       }
     }
-  }, []);
+  }, [isAiSpeaking, isVoiceUnlocked, phase, interruptAI]);
 
   const toggleListening = () => {
     if (isListening) {
@@ -83,7 +181,7 @@ export default function InterviewPage() {
     } else {
       if (recognitionRef.current) {
         setInput(""); 
-        recognitionRef.current.start();
+        try { recognitionRef.current.start(); } catch(e) {}
         setIsListening(true);
       } else {
         alert("Speech recognition is not supported in this browser. Try Chrome or Edge.");
@@ -91,9 +189,8 @@ export default function InterviewPage() {
     }
   };
 
-  const speakMessage = (text: string) => {
+  const speakChunk = (text: string) => {
     if (!isVoiceEnabled || !window.speechSynthesis) return;
-    window.speechSynthesis.cancel();
     
     let cleanText = text.replace(/```[\s\S]*?```/g, " Code block omitted. ");
     cleanText = cleanText.replace(/\[.*?\]/g, ""); 
@@ -102,16 +199,21 @@ export default function InterviewPage() {
     if (!cleanText.trim()) return;
 
     const utterance = new SpeechSynthesisUtterance(cleanText.trim());
-    utterance.rate = 1.05;
+    utterance.rate = 0.85; // Natural, slightly slower pacing
     
+    utterance.onstart = () => setIsAiSpeaking(true);
     utterance.onend = () => {
-      // Auto-start listening after AI finishes speaking for seamless flow
-      if (recognitionRef.current && !isListening) {
-        recognitionRef.current.start();
-        setIsListening(true);
-      }
+      // Small timeout to see if another chunk is immediately spoken
+      setTimeout(() => {
+          if (!window.speechSynthesis.speaking) {
+             setIsAiSpeaking(false);
+             if (recognitionRef.current && !isListening && isVoiceUnlocked) {
+                 try { recognitionRef.current.start(); setIsListening(true); } catch(e) {}
+             }
+          }
+      }, 100);
     };
-
+    
     window.speechSynthesis.speak(utterance);
   };
 
@@ -138,8 +240,12 @@ export default function InterviewPage() {
     const sessionData = sessionStorage.getItem("interview_session");
     if (sessionData) {
       const data = JSON.parse(sessionData);
-      speakMessage(data.message);
+      speakChunk(data.message);
     }
+    try {
+        recognitionRef.current?.start();
+        setIsListening(true);
+    } catch(e) {}
   };
 
   // Auto-scroll to bottom
@@ -152,48 +258,146 @@ export default function InterviewPage() {
     if (!isLoading) inputRef.current?.focus();
   }, [isLoading]);
 
+
+  const handleSilence = async () => {
+      silenceCountRef.current += 1;
+      await sendMessageCore("[SILENCE]");
+  }
+
   const handleSend = async () => {
-    if (!input.trim() || isLoading || !sessionId) return;
+     silenceCountRef.current = 0; 
+     if (autoSubmitTimerRef.current) clearTimeout(autoSubmitTimerRef.current);
+     if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+     
+     // Read from latestRef to capture latest react state correctly
+     const messageToSend = input || latestInputRef.current;
+     await sendMessageCore(messageToSend);
+  };
 
-    if (isListening) {
-      recognitionRef.current?.stop();
-      setIsListening(false);
+  const sendMessageCore = async (messageText: string) => {
+    if (!sessionId || isSubmittingRef.current) return;
+    
+    isSubmittingRef.current = true;
+    if (autoSubmitTimerRef.current) clearTimeout(autoSubmitTimerRef.current);
+
+    const isSilence = messageText === "[SILENCE]";
+    const userMessage = messageText.trim();
+    
+    if (!userMessage && !isSilence) {
+        isSubmittingRef.current = false;
+        return;
     }
 
-    const userMessage = input.trim();
-
-    // If in coding phase, append code to message
-    let messageToSend = userMessage;
-    if (showEditor && code.trim() !== "# Write your solution here") {
-      messageToSend = `${userMessage}\n\n[CODE]\n${code}`;
+    if (!isSilence) {
+        let messageToSend = userMessage;
+        if (showEditor && code.trim() !== "# Write your solution here") {
+          messageToSend = `${userMessage}\n\n[CODE]\n${code}`;
+        }
+        setMessages((prev) => [...prev, { role: "user", content: userMessage }]);
+        setInput("");
     }
-
-    setMessages((prev) => [...prev, { role: "user", content: userMessage }]);
-    setInput("");
+    
     setIsLoading(true);
+    setIsAiSpeaking(false);
+    
+    // Setup fresh abort controller for this stream
+    if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+    }
+    abortControllerRef.current = new AbortController();
+
+    // Prepare stream state
+    let fullAiResponse = "";
+    let currentSentence = "";
+    setMessages((prev) => [...prev, { role: "ai", content: "" }]);
 
     try {
-      const res = await fetch(`${API_URL}/message`, {
+      const res = await fetch(`${API_URL}/message_stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session_id: sessionId, message: messageToSend }),
+        body: JSON.stringify({ 
+            session_id: sessionId, 
+            message: !isSilence && showEditor && code.trim() !== "# Write your solution here" ? `${userMessage}\n\n[CODE]\n${code}` : (isSilence ? "[SILENCE]" : userMessage),
+            silence_count: silenceCountRef.current
+        }),
+        signal: abortControllerRef.current.signal
       });
 
       if (!res.ok) throw new Error("Failed to send message");
 
-      const data = await res.json();
-      setPhase(data.phase);
-      setShowEditor(data.showEditor);
-      setMessages((prev) => [...prev, { role: "ai", content: data.message }]);
-      speakMessage(data.message);
-    } catch (err) {
-      console.error("Message error:", err);
-      setMessages((prev) => [
-        ...prev,
-        { role: "ai", content: "[Connection error. Please try again.]" },
-      ]);
+      const reader = res.body?.getReader();
+      const decoder = new TextDecoder();
+
+      if (reader) {
+          while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+
+              const chunk = decoder.decode(value, { stream: true });
+              const events = chunk.split("\n\n");
+
+              for (const event of events) {
+                  if (event.startsWith("data: ")) {
+                      const dataStr = event.substring(6);
+                      if (!dataStr) continue;
+                      
+                      const data = JSON.parse(dataStr);
+                      
+                      if (data.type === "init") {
+                          setPhase(data.phase);
+                          setShowEditor(data.showEditor);
+                      } else if (data.type === "chunk") {
+                          const textChunk = data.content;
+                          fullAiResponse += textChunk;
+                          currentSentence += textChunk;
+
+                          // Dynamic Phase Transition driven by AI
+                          if (fullAiResponse.includes("[START_CODING]") && phase === "discussion") {
+                              setPhase("coding");
+                              setShowEditor(true);
+                          }
+
+                          // Update UI incrementally, hiding internal AI tags
+                          setMessages((prev) => {
+                              const newVals = [...prev];
+                              const displayContent = fullAiResponse.replace(/\[START_CODING\]/g, "").trim();
+                              newVals[newVals.length - 1] = { role: "ai", content: displayContent };
+                              return newVals;
+                          });
+
+                          // TTS Chunking based on sentence completion
+                          if (/[.!?]\s/.test(currentSentence) || currentSentence.endsWith(".") || currentSentence.endsWith("?") || currentSentence.endsWith("!")) {
+                              speakChunk(currentSentence);
+                              currentSentence = "";
+                          }
+                      } else if (data.type === "done") {
+                          // Flush remaining sentence
+                          if (currentSentence.trim()) {
+                              speakChunk(currentSentence);
+                          }
+                      }
+                  }
+              }
+          }
+      }
+
+    } catch (err: any) {
+      if (err.name === "AbortError") {
+          console.log("Stream aborted via interruption.");
+      } else {
+          console.error("Message error:", err);
+          setMessages((prev) => [
+            ...prev,
+            { role: "ai", content: "[Connection error. Please try again.]" },
+          ]);
+      }
     } finally {
       setIsLoading(false);
+      isSubmittingRef.current = false;
+      // STOP THE INFINITE LOOP: Do not restart the silence timer if the AI returned an error.
+      if (!fullAiResponse.includes("EXHAUSTED") && !fullAiResponse.includes("Error:") && !fullAiResponse.includes("Connection error")) {
+          resetSilenceTimer();
+      }
     }
   };
 
@@ -223,7 +427,7 @@ export default function InterviewPage() {
           : "Please fix the issues and try again."
       }`;
       setMessages(prev => [...prev, { role: "ai", content: aiResponse }]);
-      speakMessage(aiResponse);
+      speakChunk(aiResponse); // Call our new speakChunk instead of old speakMessage
     } catch (err) {
       console.error(err);
       setMessages(prev => [...prev, { role: "ai", content: "[Execution error. Please try again.]" }]);
@@ -277,6 +481,11 @@ export default function InterviewPage() {
             </span>
           </div>
           <div className="flex items-center gap-4">
+            {isAiSpeaking && (
+               <span className="flex items-center gap-1.5 text-xs font-medium text-green-400 animate-pulse">
+                   <span>🔊</span> AI is Speaking...
+               </span>
+            )}
             <button
               onClick={() => {
                 if (isVoiceEnabled) window.speechSynthesis?.cancel();
@@ -340,12 +549,12 @@ export default function InterviewPage() {
             ))}
 
             {/* Typing indicator */}
-            {isLoading && (
+            {isLoading && !messages.some(m => m.role === "ai" && m.content === "") && (
               <div className="flex justify-start">
                 <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl px-5 py-3 rounded-bl-md">
                   <div className="flex items-center gap-1.5 mb-2 text-xs text-[var(--text-muted)]">
                     <span>🤖</span>
-                    <span>Interviewer is typing</span>
+                    <span>Interviewer is thinking</span>
                   </div>
                   <div className="flex gap-1.5 py-1">
                     <span className="typing-dot" />
@@ -391,7 +600,7 @@ export default function InterviewPage() {
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={handleKeyDown}
-                  disabled={isLoading}
+                  disabled={isLoading && messages.length > 0 && messages[messages.length-1].role !== 'ai'}
                   placeholder={
                     showEditor
                       ? 'Type "done" when you finish coding...'
@@ -403,10 +612,10 @@ export default function InterviewPage() {
                 <button
                   id="send-btn"
                   onClick={handleSend}
-                  disabled={isLoading || !input.trim()}
+                  disabled={(isLoading && messages[messages.length-1]?.role !== 'ai') || !input.trim()}
                   className="px-5 py-3 rounded-xl bg-[var(--accent)] text-white font-medium text-sm hover:bg-purple-600 disabled:opacity-40 disabled:cursor-not-allowed transition-all cursor-pointer flex items-center justify-center min-w-[80px]"
                 >
-                  {isLoading ? (
+                  {isLoading && messages[messages.length-1]?.role !== 'ai' ? (
                     <div className="flex gap-1">
                       <span className="w-1 h-1 bg-white rounded-full animate-bounce" />
                       <span className="w-1 h-1 bg-white rounded-full animate-bounce [animation-delay:0.2s]" />

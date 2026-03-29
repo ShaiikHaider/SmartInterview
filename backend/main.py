@@ -4,6 +4,7 @@ from pydantic import BaseModel
 
 import sys
 import os
+import json
 
 # Safe imports for folder structure
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -49,6 +50,12 @@ class MessageResponse(BaseModel):
     phase: str
     message: str
     showEditor: bool
+
+
+class MessageStreamRequest(BaseModel):
+    session_id: str
+    message: str
+    silence_count: int = 0
 
 
 class ExecuteRequest(BaseModel):
@@ -164,6 +171,64 @@ async def send_message(req: MessageRequest):
     )
 
 
+from fastapi.responses import StreamingResponse
+
+@app.post("/message_stream")
+async def send_message_stream(req: MessageStreamRequest):
+    """Process a user message and return a streamed AI response using SSE."""
+    from backend.ai_service import generate_response_stream
+    
+    session = get_session(req.session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    is_silence = req.message == "[SILENCE]"
+
+    # Record user message if it's not silence
+    if not is_silence:
+        add_to_history(req.session_id, "user", req.message)
+
+    # State machine decides next phase
+    new_phase = next_phase(session, req.message if not is_silence else "")
+    session["phase"] = new_phase
+    if not is_silence:
+        session["step"] += 1
+
+    show_editor = should_show_editor(new_phase)
+
+    async def event_generator():
+        # First send the state changes so UI can apply phase/editor visibility
+        init_data = json.dumps({"type": "init", "phase": new_phase, "showEditor": show_editor})
+        yield f"data: {init_data}\n\n"
+
+        full_response = ""
+        async for chunk in generate_response_stream(
+            phase=new_phase,
+            topic=session["topic"],
+            difficulty=session["difficulty"],
+            user_input=req.message,
+            history=session["history"],
+            silence_count=req.silence_count
+        ):
+            full_response += chunk
+            chunk_data = json.dumps({"type": "chunk", "content": chunk})
+            yield f"data: {chunk_data}\n\n"
+
+        # Sync backend session state if AI triggered a transition
+        if "[START_CODING]" in full_response and session["phase"] == "discussion":
+            session["phase"] = "coding"
+
+        # Record AI response
+        add_to_history(req.session_id, "ai", full_response)
+        
+        # Signal that stream is done
+        done_data = json.dumps({"type": "done"})
+        yield f"data: {done_data}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+# Force reload for new API key
