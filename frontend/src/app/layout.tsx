@@ -13,6 +13,7 @@ export const metadata: Metadata = {
     "Master your technical interviews with Vouch ez. Practice with a rigorous AI that challenges you like a FAANG engineer.",
 };
 
+import { Suspense } from 'react'
 import Navigation from "@/components/Navigation";
 
 export default function RootLayout({
@@ -23,7 +24,9 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${inter.variable} h-full antialiased`}>
       <body suppressHydrationWarning className="min-h-full flex flex-col bg-[#0a0a0f] text-white font-[var(--font-inter)]">
-        <Navigation />
+        <Suspense fallback={null}>
+          <Navigation />
+        </Suspense>
         <main className="flex-1 flex flex-col">
           {children}
         </main>
