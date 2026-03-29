@@ -1,10 +1,10 @@
 'use client'
 import Link from 'next/link'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, Suspense } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useSearchParams } from 'next/navigation'
 
-export default function LandingPage() {
+function LandingContent() {
   const searchParams = useSearchParams()
   const [user, setUser] = useState<any>(null)
   const [isVerified, setIsVerified] = useState(false)
@@ -22,10 +22,12 @@ export default function LandingPage() {
   }, [])
 
   return (
-    <div className="flex-1 flex flex-col bg-[#0a0a0f] relative overflow-hidden">
+    <main className="min-h-screen flex flex-col items-center bg-[#0a0a0f] text-white selection:bg-blue-500/30">
       {/* Background Gradients */}
-      <div className="absolute top-0 left-1/4 w-[500px] h-[500px] bg-blue-600/20 blur-[120px] rounded-full -z-10 animate-float" />
-      <div className="absolute bottom-0 right-1/4 w-[400px] h-[400px] bg-indigo-600/20 blur-[100px] rounded-full -z-10 animate-float-delay" />
+      <div className="fixed inset-0 pointer-events-none overflow-hidden">
+        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-blue-600/10 blur-[120px] rounded-full animate-float" />
+        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-indigo-600/10 blur-[120px] rounded-full animate-float" style={{ animationDelay: '-3s' }} />
+      </div>
 
       {/* Hero Section */}
       <section className="flex-1 flex flex-col items-center justify-center text-center px-6 pt-32 pb-20 max-w-6xl mx-auto">
@@ -45,7 +47,7 @@ export default function LandingPage() {
           Real-time code execution, voice-activated feedback, and objective performance metrics.
         </p>
 
-        <div className="flex flex-col md:flex-row items-center gap-6 animate-fade-in-up mb-20" style={{ animationDelay: '0.3s' }}>
+        <div className="flex flex-col md:flex-row items-center gap-6 animate-fade-in-up mb-12" style={{ animationDelay: '0.3s' }}>
           {user ? (
             <Link 
               href="/setup" 
@@ -82,53 +84,41 @@ export default function LandingPage() {
             <div className="text-xs text-gray-500 uppercase font-bold tracking-widest">Questions</div>
           </div>
           <div className="p-6 rounded-3xl bg-white/5 border border-white/5 backdrop-blur-sm">
-            <div className="text-3xl font-black mb-1">Real-time</div>
+            <div className="text-3xl font-black mb-1 text-white">Real-time</div>
             <div className="text-xs text-gray-500 uppercase font-bold tracking-widest">Execution</div>
           </div>
           <div className="p-6 rounded-3xl bg-white/5 border border-white/5 backdrop-blur-sm">
-            <div className="text-3xl font-black mb-1">Groq-70b</div>
+            <div className="text-3xl font-black mb-1 text-white">Groq-70b</div>
             <div className="text-xs text-gray-500 uppercase font-bold tracking-widest">Core Engine</div>
           </div>
         </div>
       </section>
 
       {/* Features Preview */}
-      <section className="bg-white/5 border-t border-white/10 py-24 px-6">
+      <section className="bg-white/5 border-t border-white/10 py-24 px-6 w-full">
         <div className="max-w-6xl mx-auto grid md:grid-cols-2 gap-16 items-center">
             <div>
                 <h2 className="text-4xl font-black mb-6">Real-world Code <br />Evaluation.</h2>
-                <p className="text-gray-400 leading-relaxed text-lg mb-8">
-                    Your code doesn't just "look" correct. It is actually executed in a secure sandbox 
-                    and analyzed by the AI for time and space complexity, edge cases, and bug-free performance.
-                </p>
-                <div className="space-y-4">
-                    {['Automated Test Cases', 'Performance Benchmarking', 'Logic Analysis'].map(f => (
-                        <div key={f} className="flex items-center gap-3 font-bold text-sm">
-                            <span className="text-blue-500">✓</span> {f}
+                <div className="space-y-6">
+                    <div className="flex gap-4">
+                        <div className="w-12 h-12 rounded-xl bg-blue-600/10 flex items-center justify-center text-blue-500 font-bold shrink-0">01</div>
+                        <div>
+                            <h3 className="font-bold mb-1">Edge Case Detection</h3>
+                            <p className="text-gray-400 text-sm">Our AI probes your solution for potential flaws before you commit.</p>
                         </div>
-                    ))}
-                </div>
-            </div>
-            <div className="relative group">
-                <div className="absolute inset-0 bg-blue-600/20 blur-3xl -z-10 group-hover:bg-blue-600/30 transition-colors" />
-                <div className="bg-[#0a0a0f] border border-white/10 p-8 rounded-[2.5rem] shadow-2xl relative overflow-hidden group-hover:scale-[1.02] transition-transform">
-                    <pre className="text-xs text-blue-400/80">
-                        {`def solve():
-    # Real execution engine
-    # Analyzing O(n log n)
-    result = []
-    for x in data:
-        process(x)
-    return result`}
-                    </pre>
+                    </div>
                 </div>
             </div>
         </div>
       </section>
-      
-      <footer className="py-10 border-t border-white/10 text-center text-xs text-gray-600 font-bold uppercase tracking-[0.2em]">
-        © 2026 SmartInterview Platform • All Rights Reserved
-      </footer>
-    </div>
+    </main>
+  )
+}
+
+export default function LandingPage() {
+  return (
+    <Suspense fallback={null}>
+      <LandingContent />
+    </Suspense>
   )
 }
