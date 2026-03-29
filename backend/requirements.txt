@@ -4,4 +4,5 @@ python-dotenv
 groq
 pydantic
 pydantic-settings
-email-validator
+httpx
+supabase

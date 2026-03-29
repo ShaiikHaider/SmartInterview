@@ -1,3 +1,4 @@
+from typing import Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -5,6 +6,7 @@ from pydantic import BaseModel
 import sys
 import os
 import json
+import httpx
 
 # Safe imports for folder structure
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -32,13 +34,15 @@ app.add_middleware(
 class StartRequest(BaseModel):
     topic: str
     difficulty: str
+    user_id: Optional[str] = None
 
 
 class StartResponse(BaseModel):
     session_id: str
-    phase: str
     message: str
+    phase: str
     showEditor: bool
+    start_time: float
 
 
 class MessageRequest(BaseModel):
@@ -61,6 +65,7 @@ class MessageStreamRequest(BaseModel):
 class ExecuteRequest(BaseModel):
     session_id: str
     code: str
+    language: str = "python"
 
 class ExecuteResponse(BaseModel):
     passed: bool
@@ -68,28 +73,69 @@ class ExecuteResponse(BaseModel):
     test_cases_output: str
     phase: str
 
+async def run_python_code(code: str) -> dict:
+    """Executes python code securely using a local subprocess."""
+    import sys
+    import subprocess
+    import tempfile
+    import asyncio
+    
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        f.write(code)
+        temp_path = f.name
+        
+    try:
+        # Run code with a 5 second timeout
+        res = await asyncio.to_thread(
+            subprocess.run, 
+            [sys.executable, temp_path], 
+            capture_output=True, 
+            text=True, 
+            timeout=5.0
+        )
+        output = ""
+        if res.stderr:
+            output += res.stderr + "\n"
+        output += res.stdout
+        return {"success": res.returncode == 0, "output": output.strip() or "Code executed with no output."}
+    except subprocess.TimeoutExpired:
+        return {"success": False, "output": "Execution Error: Code timed out after 5 seconds. Check for infinite loops."}
+    except Exception as e:
+        return {"success": False, "output": f"Execution Engine Error: {str(e)}"}
+    finally:
+        try:
+            os.remove(temp_path)
+        except:
+            pass
+
+
 @app.post("/execute", response_model=ExecuteResponse)
 async def execute_code(req: ExecuteRequest):
-    """Evaluates the user's code against AI mental test cases."""
+    """Executes the user's code against Piston to get real stack traces, then feeds it to AI."""
     from backend.ai_service import evaluate_code
     
     session = get_session(req.session_id)
-    eval_result = await evaluate_code(session["topic"], session["difficulty"], req.code)
+    
+    # 1. Real Code Execution via Subprocess
+    exec_res = await run_python_code(req.code)
+    actual_output = exec_res["output"]
+    
+    # 2. Ask AI to evaluate if this output constitutes a solved problem
+    eval_result = await evaluate_code(session["topic"], session["difficulty"], req.code, actual_output)
     
     user_msg = f"[Submitted Code for Evaluation]\n```python\n{req.code}\n```"
-    ai_msg = f"[Test Results]\nPassed: {eval_result['passed']}\nFeedback: {eval_result['feedback']}\nOutput: {eval_result['test_cases_output']}"
+    ai_msg = f"⏱️ **Execution Engine Output:**\n```\n{actual_output}\n```\n\nAI Evaluation:\nPassed: {eval_result['passed']}\nFeedback: {eval_result['feedback']}"
     
     add_to_history(req.session_id, "user", user_msg)
     
     if eval_result["passed"]:
         session["phase"] = "technical"
-        ai_msg += "\n\nGreat job! Let's move to the technical questions."
+        ai_msg += "\n\nLet's move to the technical questions."
     else:
         if session["coding_attempts"] >= 2:
             session["phase"] = "feedback"
             ai_msg += "\n\nMaximum attempts reached. Moving to final review."
         else:
-            # session["phase"] remains "coding"
             ai_msg += "\n\nPlease fix the issues and try again."
 
     add_to_history(req.session_id, "ai", ai_msg)
@@ -97,7 +143,7 @@ async def execute_code(req: ExecuteRequest):
     return ExecuteResponse(
         passed=eval_result["passed"],
         feedback=eval_result["feedback"],
-        test_cases_output=eval_result["test_cases_output"],
+        test_cases_output=actual_output,
         phase=session["phase"]
     )
 
@@ -109,8 +155,8 @@ async def start_interview(req: StartRequest):
     
     Creates session, generates HR intro via AI, returns first message.
     """
-    print(f"!!! Received start request for {req.topic} {req.difficulty}", flush=True)
-    session_id, session = create_session(req.topic, req.difficulty)
+    print(f"!!! Received start request for {req.topic} {req.difficulty} ({req.user_id})", flush=True)
+    session_id, session = create_session(req.topic, req.difficulty, req.user_id)
 
     print(f"!!! Session created: {session_id}. Calling AI...", flush=True)
     # Generate the opening HR question via AI
@@ -127,9 +173,10 @@ async def start_interview(req: StartRequest):
 
     return StartResponse(
         session_id=session_id,
-        phase=session["phase"],
         message=ai_message,
+        phase=session["phase"],
         showEditor=should_show_editor(session["phase"]),
+        start_time=session["start_time"]
     )
 
 
@@ -220,6 +267,24 @@ async def send_message_stream(req: MessageStreamRequest):
 
         # Record AI response
         add_to_history(req.session_id, "ai", full_response)
+        
+        if new_phase == "feedback":
+            import re
+            # Much more robust regex: catches "7/10", "7 out of 10", "Score: 7", etc.
+            score = 5 # Default
+            match = re.search(r'(\d{1,2})\s*(?:/|out of)\s*10', full_response, re.IGNORECASE)
+            if match:
+                score = int(match.group(1))
+            else:
+                # Fallback: just look for the first number 1-10 near the word "score" or "rating"
+                match_fallback = re.search(r'(?:score|rating|out of 10).*?(\d{1,2})', full_response, re.IGNORECASE | re.DOTALL)
+                if match_fallback:
+                    score = int(match_fallback.group(1))
+            
+            session["score"] = min(10, max(0, score))
+            session["final_feedback"] = full_response
+            from backend.session import log_interview_completion
+            log_interview_completion(req.session_id)
         
         # Signal that stream is done
         done_data = json.dumps({"type": "done"})

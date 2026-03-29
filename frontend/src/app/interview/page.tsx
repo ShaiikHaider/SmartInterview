@@ -40,6 +40,8 @@ export default function InterviewPage() {
   const [code, setCode] = useState("# Write your solution here\n\n");
   const [topic, setTopic] = useState("");
   const [difficulty, setDifficulty] = useState("");
+  const [timeLeft, setTimeLeft] = useState(480); // 8 mins for testing
+  const [isTimeUp, setIsTimeUp] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   
@@ -232,8 +234,44 @@ export default function InterviewPage() {
       setPhase(data.phase);
       setShowEditor(data.showEditor);
       setMessages([{ role: "ai", content: data.message }]);
+
+      // Timer calculation based on backend start_time
+      if (data.start_time) {
+        const elapsed = Math.floor(Date.now() / 1000 - data.start_time);
+        const remaining = Math.max(0, 480 - elapsed);
+        setTimeLeft(remaining);
+      }
     }
   }, []);
+
+  // Timer Countdown Logic
+  useEffect(() => {
+    if (!sessionId || phase === "feedback" || isTimeUp) return;
+
+    const timer = setInterval(() => {
+      setTimeLeft((prev) => {
+        if (prev <= 1) {
+          clearInterval(timer);
+          handleTimeUp();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [sessionId, phase, isTimeUp]);
+
+  const handleTimeUp = () => {
+    setIsTimeUp(true);
+    sendMessageCore("[TIME EXPIRED]");
+  };
+
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
 
   const handleStartVoice = () => {
     setIsVoiceUnlocked(true);
@@ -466,52 +504,60 @@ export default function InterviewPage() {
           </div>
         </div>
       )}
-      {/* Top Bar */}
-      <header className="flex-shrink-0 border-b border-[var(--border)] bg-[var(--bg-secondary)]">
-        <div className="flex items-center justify-between px-6 py-3">
-          <div className="flex items-center gap-3">
-            <h1 className="text-lg font-bold bg-gradient-to-r from-[var(--accent)] to-purple-400 bg-clip-text text-transparent">
-              Interview Coach
-            </h1>
-            <span className="px-2.5 py-0.5 rounded-full text-xs font-medium bg-[var(--accent-soft)] text-[var(--accent)] border border-[var(--border-accent)]">
-              {topic.toUpperCase()}
-            </span>
-            <span className="px-2.5 py-0.5 rounded-full text-xs font-medium bg-[var(--bg-card)] text-[var(--text-secondary)]">
-              {difficulty.toUpperCase()}
-            </span>
-          </div>
+      {/* Top Bar (Sticky Timer) */}
+      <header className="sticky top-0 z-[60] flex-shrink-0 border-b border-white/10 bg-[#0a0a0f]/90 backdrop-blur-2xl">
+        <div className="flex items-center justify-between px-6 py-4">
           <div className="flex items-center gap-4">
-            {isAiSpeaking && (
-               <span className="flex items-center gap-1.5 text-xs font-medium text-green-400 animate-pulse">
-                   <span>🔊</span> AI is Speaking...
-               </span>
-            )}
-            <button
-              onClick={() => {
-                if (isVoiceEnabled) window.speechSynthesis?.cancel();
-                setIsVoiceEnabled(!isVoiceEnabled);
-              }}
-              className={`px-3 py-1.5 rounded-lg border text-xs font-semibold transition-all ${
-                isVoiceEnabled 
-                  ? "bg-[var(--accent-soft)] border-[var(--border-accent)] text-[var(--accent)]" 
-                  : "bg-[var(--bg-card)] border-[var(--border)] text-[var(--text-muted)] hover:text-white"
-              }`}
-              title="Toggle AI Voice"
-            >
-              {isVoiceEnabled ? "🔊 Voice On" : "🔇 Voice Off"}
-            </button>
-            <div className="flex items-center gap-2">
-              <span className="text-lg">{PHASE_ICONS[phase] || "📌"}</span>
-              <span className="text-sm font-semibold text-[var(--text-primary)]">
-                {PHASE_LABELS[phase] || phase}
+            <h1 className="text-lg font-black tracking-tight text-white uppercase italic">
+              Focused Session
+            </h1>
+            <div className="h-6 w-px bg-white/10" />
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/5 border border-white/10 font-mono text-sm font-black">
+              <span className={`w-2 h-2 rounded-full ${timeLeft < 300 ? 'bg-red-500 animate-pulse' : 'bg-green-500'}`} />
+              <span className={timeLeft < 300 ? 'text-red-500' : 'text-gray-300'}>
+                {formatTime(timeLeft)}
               </span>
             </div>
           </div>
+          
+          <div className="flex items-center gap-6">
+            <div className="flex items-center gap-3">
+              <span className="px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-[0.2em] bg-blue-600/10 text-blue-400 border border-blue-500/20">
+                {topic}
+              </span>
+              <span className="px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-[0.2em] bg-white/5 text-gray-400 border border-white/10">
+                {difficulty}
+              </span>
+            </div>
+            
+            <div className="flex items-center gap-4">
+              <button
+                onClick={() => {
+                  if (isVoiceEnabled) window.speechSynthesis?.cancel();
+                  setIsVoiceEnabled(!isVoiceEnabled);
+                }}
+                className={`flex items-center gap-2 px-4 py-1.5 rounded-xl border text-[10px] font-black uppercase tracking-wider transition-all ${
+                  isVoiceEnabled 
+                    ? "bg-blue-600 border-blue-500 text-white shadow-lg shadow-blue-500/20" 
+                    : "bg-white/5 border-white/10 text-gray-500 hover:text-white"
+                }`}
+              >
+                {isVoiceEnabled ? "🔊 Voice On" : "🔇 Muted"}
+              </button>
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/5 border border-white/10 shadow-inner">
+                <span className="text-sm">{PHASE_ICONS[phase] || "📌"}</span>
+                <span className="text-[10px] font-black uppercase tracking-widest text-white">
+                  {PHASE_LABELS[phase] || phase}
+                </span>
+              </div>
+            </div>
+          </div>
         </div>
+        
         {/* Progress bar */}
-        <div className="h-0.5 bg-[var(--bg-card)]">
+        <div className="h-1 bg-white/5">
           <div
-            className="h-full bg-gradient-to-r from-[var(--accent)] to-purple-400 transition-all duration-500"
+            className="h-full bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500 shadow-[0_0_10px_rgba(59,130,246,0.5)] transition-all duration-700 ease-out"
             style={{ width: `${progress}%` }}
           />
         </div>

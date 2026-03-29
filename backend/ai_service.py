@@ -167,6 +167,13 @@ async def generate_response(phase: str, topic: str, difficulty: str, user_input:
     
     return await call_groq(msgs, sys_prompt)
 
+async def generate_response(phase: str, topic: str, difficulty: str, user_input: str, history: list[dict]):
+    """Non-streaming version for the start intro."""
+    full_text = ""
+    async for chunk in generate_response_stream(phase, topic, difficulty, user_input, history):
+        full_text += chunk
+    return full_text
+
 async def generate_response_stream(phase: str, topic: str, difficulty: str, user_input: str, history: list[dict], silence_count: int = 0):
     phase_instructions = {
         "hr_intro": "Start the interview. Ask a short behavioral intro question.",
@@ -175,7 +182,7 @@ async def generate_response_stream(phase: str, topic: str, difficulty: str, user
         "discussion": "The candidate is explaining their approach. Be critical. Ask about constraints, edge cases, and Time/Space complexity. If they are completely correct and you are satisfied, tell them to start coding and append [START_CODING].",
         "coding": "Candidate is coding. Provide minimal, strict hints if stuck.",
         "technical": f"Ask one fundamental {topic} question.",
-        "feedback": "Provide brief Rating (1-10) and Recommendation.",
+        "feedback": "Provide final Rating (format: X/10) and brief Recommendation.",
     }
     instruction = phase_instructions.get(phase, "Continue interview.")
 
@@ -195,9 +202,9 @@ async def generate_response_stream(phase: str, topic: str, difficulty: str, user
     async for chunk in call_groq_stream(msgs, sys_prompt):
         yield chunk
 
-async def evaluate_code(topic: str, difficulty: str, code: str) -> dict:
-    sys_prompt = "You are a code evaluator. Respond ONLY with a valid JSON object matching the exact schema provided. Do not include markdown formatting or reasoning."
-    user_prompt = f"Evaluate this {topic} code ({difficulty}):\n\n```python\n{code}\n```\n\nReturn JSON: {{\"passed\": true/false, \"feedback\": \"short explanation\", \"test_cases_output\": \"results of mental test cases\"}}"
+async def evaluate_code(topic: str, difficulty: str, code: str, actual_output: str) -> dict:
+    sys_prompt = "You are a strict technical coding evaluator. Respond ONLY with a valid JSON object matching the exact schema provided. Do not include markdown formatting or reasoning."
+    user_prompt = f"Evaluate this {topic} code ({difficulty}):\n\n```python\n{code}\n```\n\n### Actual Execution Engine Output\n```\n{actual_output}\n```\n\nDid the user's code run correctly and successfully solve the problem based on the output? If there are tracebacks or bad logic, fail them. Return JSON: {{\"passed\": true/false, \"feedback\": \"short 1-sentence explanation of what went wrong or went right based strictly on the output\"}}"
     
     raw_response = await call_groq([{"role": "user", "content": user_prompt}], sys_prompt, json_mode=True)
     

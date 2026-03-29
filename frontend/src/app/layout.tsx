@@ -8,10 +8,12 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "AI Interview Coach | FAANG-Level Technical Interviews",
+  title: "Vouch ez | Premium AI Technical Interviews",
   description:
-    "Practice real technical interviews with an AI interviewer that challenges you like a FAANG engineer.",
+    "Master your technical interviews with Vouch ez. Practice with a rigorous AI that challenges you like a FAANG engineer.",
 };
+
+import Navigation from "@/components/Navigation";
 
 export default function RootLayout({
   children,
@@ -21,7 +23,10 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${inter.variable} h-full antialiased`}>
       <body suppressHydrationWarning className="min-h-full flex flex-col bg-[#0a0a0f] text-white font-[var(--font-inter)]">
-        {children}
+        <Navigation />
+        <main className="flex-1 flex flex-col">
+          {children}
+        </main>
       </body>
     </html>
   );

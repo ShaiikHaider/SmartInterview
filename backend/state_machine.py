@@ -15,12 +15,13 @@ PHASES = [
 
 
 def next_phase(session: dict, user_input: str) -> str:
-    """Determine the next phase based on current session state and user input.
-    
-    This is the ONLY place phase transitions happen.
-    AI must NEVER control phase transitions.
-    """
+    """ Determine the next phase based on current session state and user input. """
     current = session["phase"]
+    
+    # Global termination override
+    if "[TIME EXPIRED]" in user_input or "[STOP]" in user_input:
+        return "feedback"
+
 
     if current == "hr_intro":
         return "hr_followup"
